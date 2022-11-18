@@ -210,6 +210,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
     }
 
     private boolean useEpoll() {
+        // linux 默认不使用epoll
         return NetworkUtil.isLinuxPlatform()
             && nettyServerConfig.isUseEpollNativeSelector()
             && Epoll.isAvailable();
@@ -246,6 +247,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                         .addLast(defaultEventExecutorGroup, HANDSHAKE_HANDLER_NAME, handshakeHandler)
                         .addLast(defaultEventExecutorGroup,
                             encoder,
+                            // 自定义decoder
                             new NettyDecoder(),
                             distributionHandler,
                             new IdleStateHandler(0, 0,
@@ -503,6 +505,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
             int localPort = RemotingHelper.parseSocketAddressPort(ctx.channel().localAddress());
             NettyRemotingAbstract remotingAbstract = NettyRemotingServer.this.remotingServerTable.get(localPort);
             if (localPort != -1 && remotingAbstract != null) {
+                // 核心逻辑处理
                 remotingAbstract.processMessageReceived(ctx, msg);
                 return;
             }

@@ -291,16 +291,23 @@ public class BrokerController {
         final NettyClientConfig nettyClientConfig,
         final MessageStoreConfig messageStoreConfig
     ) {
+        // broker配置
         this.brokerConfig = brokerConfig;
+        // netty服务器配置
         this.nettyServerConfig = nettyServerConfig;
+        // netty客户端配置
         this.nettyClientConfig = nettyClientConfig;
+        // broker存储配置
         this.messageStoreConfig = messageStoreConfig;
         this.setStoreHost(new InetSocketAddress(this.getBrokerConfig().getBrokerIP1(), getListenPort()));
         this.brokerStatsManager = messageStoreConfig.isEnableLmq() ? new LmqBrokerStatsManager(this.brokerConfig.getBrokerClusterName(), this.brokerConfig.isEnableDetailStat()) : new BrokerStatsManager(this.brokerConfig.getBrokerClusterName(), this.brokerConfig.isEnableDetailStat());
+        // 消费者唯一offset管理，针对rocketMQ集群模式，广播模式，本地存储
         this.consumerOffsetManager = messageStoreConfig.isEnableLmq() ? new LmqConsumerOffsetManager(this) : new ConsumerOffsetManager(this);
         this.broadcastOffsetManager = new BroadcastOffsetManager(this);
+        // topic配置信息
         this.topicConfigManager = messageStoreConfig.isEnableLmq() ? new LmqTopicConfigManager(this) : new TopicConfigManager(this);
         this.topicQueueMappingManager = new TopicQueueMappingManager(this);
+        // 当有对应的消息到达时，触发暂存的消息拉取请求，获取信息返回
         this.pullMessageProcessor = new PullMessageProcessor(this);
         this.peekMessageProcessor = new PeekMessageProcessor(this);
         this.pullRequestHoldService = messageStoreConfig.isEnableLmq() ? new LmqPullRequestHoldService(this) : new PullRequestHoldService(this);
@@ -425,7 +432,7 @@ public class BrokerController {
     protected void initializeRemotingServer() throws CloneNotSupportedException {
         this.remotingServer = new NettyRemotingServer(this.nettyServerConfig, this.clientHousekeepingService);
         NettyServerConfig fastConfig = (NettyServerConfig) this.nettyServerConfig.clone();
-
+        // 新增一个fastRemotingServer，防止重要业务被阻塞，新增了一个端口；对于新版本意义不大，默认不开启
         int listeningPort = nettyServerConfig.getListenPort() - 2;
         if (listeningPort < 0) {
             listeningPort = 0;
@@ -561,6 +568,7 @@ public class BrokerController {
             @Override
             public void run() {
                 try {
+                    // 打印broker状态
                     BrokerController.this.getBrokerStats().record();
                 } catch (Throwable e) {
                     LOG.error("BrokerController: failed to record broker stats", e);
@@ -572,6 +580,7 @@ public class BrokerController {
             @Override
             public void run() {
                 try {
+                    // 定时向consumerOffset.json写入消费者偏移量
                     BrokerController.this.consumerOffsetManager.persist();
                 } catch (Throwable e) {
                     LOG.error(
@@ -584,6 +593,7 @@ public class BrokerController {
             @Override
             public void run() {
                 try {
+                    // 定时向consumerFilter.json写入消费者过滤信息
                     BrokerController.this.consumerFilterManager.persist();
                     BrokerController.this.consumerOrderInfoManager.persist();
                 } catch (Throwable e) {
@@ -598,6 +608,7 @@ public class BrokerController {
             @Override
             public void run() {
                 try {
+                    // 定时禁用消费慢的consumer，保护broker
                     BrokerController.this.protectBroker();
                 } catch (Throwable e) {
                     LOG.error("BrokerController: failed to protectBroker", e);
@@ -609,6 +620,7 @@ public class BrokerController {
             @Override
             public void run() {
                 try {
+                    // 定时打印send,pull,query,transaction队列信息
                     BrokerController.this.printWaterMark();
                 } catch (Throwable e) {
                     LOG.error("BrokerController: failed to print broker watermark", e);
@@ -621,6 +633,7 @@ public class BrokerController {
             @Override
             public void run() {
                 try {
+                    // 打印一存储到提交到日志中但未调度到消费队列的字节数
                     LOG.info("Dispatch task fall behind commit log {}bytes",
                         BrokerController.this.getMessageStore().dispatchBehindBytes());
                 } catch (Throwable e) {
@@ -630,8 +643,10 @@ public class BrokerController {
         }, 1000 * 10, 1000 * 60, TimeUnit.MILLISECONDS);
 
         if (!messageStoreConfig.isEnableDLegerCommitLog() && !messageStoreConfig.isDuplicationEnable() && !brokerConfig.isEnableControllerMode()) {
+            // 如果是slave节点
             if (BrokerRole.SLAVE == this.messageStoreConfig.getBrokerRole()) {
                 if (this.messageStoreConfig.getHaMasterAddress() != null && this.messageStoreConfig.getHaMasterAddress().length() >= HA_ADDRESS_MIN_LENGTH) {
+                    // 更新HAmaster地址
                     this.messageStore.updateHaMasterAddress(this.messageStoreConfig.getHaMasterAddress());
                     this.updateMasterHAServerAddrPeriodically = false;
                 } else {
@@ -644,6 +659,7 @@ public class BrokerController {
                     public void run() {
                         try {
                             if (System.currentTimeMillis() - lastSyncTimeMs > 60 * 1000) {
+                                // 如果距离上一次同步超过1分钟，同步所有数据
                                 BrokerController.this.getSlaveSynchronize().syncAll();
                                 lastSyncTimeMs = System.currentTimeMillis();
                             }
@@ -661,6 +677,7 @@ public class BrokerController {
                     @Override
                     public void run() {
                         try {
+                            // 非salve节点，打印salve同步落后的字节数
                             BrokerController.this.printMasterAndSlaveDiff();
                         } catch (Throwable e) {
                             LOG.error("Failed to print diff of master and slave.", e);
@@ -728,8 +745,9 @@ public class BrokerController {
     }
 
     public boolean initialize() throws CloneNotSupportedException {
-
+        // 加载topic配置
         boolean result = this.topicConfigManager.load();
+        // 加载消息偏移量及订阅组配置
         result = result && this.topicQueueMappingManager.load();
         result = result && this.consumerOffsetManager.load();
         result = result && this.subscriptionGroupManager.load();
@@ -738,15 +756,17 @@ public class BrokerController {
 
         if (result) {
             try {
+                // 初始化存储模块
                 DefaultMessageStore defaultMessageStore = new DefaultMessageStore(this.messageStoreConfig, this.brokerStatsManager, this.messageArrivingListener, this.brokerConfig);
                 defaultMessageStore.setTopicConfigTable(topicConfigManager.getTopicConfigTable());
 
                 if (messageStoreConfig.isEnableDLegerCommitLog()) {
+                    // raft协议多副本
                     DLedgerRoleChangeHandler roleChangeHandler = new DLedgerRoleChangeHandler(this, defaultMessageStore);
                     ((DLedgerCommitLog) defaultMessageStore.getCommitLog()).getdLedgerServer().getdLedgerLeaderElector().addRoleChangeHandler(roleChangeHandler);
                 }
                 this.brokerStats = new BrokerStats(defaultMessageStore);
-                //load plugin
+                //load plugin 加载存储插件
                 MessageStorePluginContext context = new MessageStorePluginContext(messageStoreConfig, brokerStatsManager, messageArrivingListener, brokerConfig, configuration);
                 this.messageStore = MessageStoreFactory.build(context, defaultMessageStore);
                 this.messageStore.getDispatcherList().addFirst(new CommitLogDispatcherCalcBitMap(this.brokerConfig, this.consumerFilterManager));
@@ -768,7 +788,7 @@ public class BrokerController {
         if (messageStore != null) {
             registerMessageStoreHook();
         }
-
+        // 加载commitLog，indexFile，ConsumeQueue等文件
         result = result && this.messageStore.load();
 
         if (messageStoreConfig.isTimerWheelEnable()) {
@@ -787,21 +807,21 @@ public class BrokerController {
         this.brokerMetricsManager = new BrokerMetricsManager(this);
 
         if (result) {
-
+            // 创建broker netty服务，监听端口，处理请求
             initializeRemotingServer();
-
+            // 初始化各种业务线程池
             initializeResources();
-
+            // 注册业务处理器，和业务线程池配合使用
             registerProcessor();
-
+            // 初始化定时任务
             initializeScheduledTasks();
-
+            // 初始化事务消息
             initialTransaction();
-
+            // 初始化ACL规则
             initialAcl();
-
+            // 初始化RPC钩子函数
             initialRpcHooks();
-
+            // ssl配置
             if (TlsSystemConfig.tlsMode != TlsMode.DISABLED) {
                 // Register a listener to reload SslContext
                 try {
@@ -906,6 +926,7 @@ public class BrokerController {
     }
 
     private void initialTransaction() {
+        // 通过Spi机制加载TransactionalMessageService/AbstractTransactionalMessageCheckListener，若无，使用默认值
         this.transactionalMessageService = ServiceProvider.loadClass(TransactionalMessageService.class);
         if (null == this.transactionalMessageService) {
             this.transactionalMessageService = new TransactionalMessageServiceImpl(
@@ -972,7 +993,8 @@ public class BrokerController {
          */
         sendMessageProcessor.registerSendMessageHook(sendMessageHookList);
         sendMessageProcessor.registerConsumeMessageHook(consumeMessageHookList);
-
+        // 将key（code）/value（pair<Processor,Executor>）添加到map，后面处理各种请求 类似SpringMVC的path，controller，executor
+        // 哪个controller对应的资源请求，由哪个线程池进行调用
         this.remotingServer.registerProcessor(RequestCode.SEND_MESSAGE, sendMessageProcessor, this.sendMessageExecutor);
         this.remotingServer.registerProcessor(RequestCode.SEND_MESSAGE_V2, sendMessageProcessor, this.sendMessageExecutor);
         this.remotingServer.registerProcessor(RequestCode.SEND_BATCH_MESSAGE, sendMessageProcessor, this.sendMessageExecutor);
@@ -1570,6 +1592,7 @@ public class BrokerController {
                         BrokerController.LOG.info("Skip register for broker is isolated");
                         return;
                     }
+                    // 向NameServer注册
                     BrokerController.this.registerBrokerAll(true, false, brokerConfig.isForceRegister());
                 } catch (Throwable e) {
                     BrokerController.LOG.error("registerBrokerAll Exception", e);

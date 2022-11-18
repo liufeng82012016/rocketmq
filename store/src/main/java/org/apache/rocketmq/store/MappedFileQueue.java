@@ -167,7 +167,7 @@ public class MappedFileQueue implements Swappable {
             if (file.isDirectory()) {
                 continue;
             }
-
+            // 如果配置项改了，就无法启动了？如果文件没有写满呢？
             if (file.length() != this.mappedFileSize) {
                 log.warn(file + "\t" + file.length()
                         + " length not matched message store config value, please check it manually");
@@ -554,7 +554,7 @@ public class MappedFileQueue implements Swappable {
     }
 
     /**
-     * Finds a mapped file by offset.
+     * Finds a mapped file by offset. 根据offset寻找mappedFile
      *
      * @param offset Offset.
      * @param returnFirstOnNotFound If the mapped file is not found, then return the first one.
@@ -565,6 +565,7 @@ public class MappedFileQueue implements Swappable {
             MappedFile firstMappedFile = this.getFirstMappedFile();
             MappedFile lastMappedFile = this.getLastMappedFile();
             if (firstMappedFile != null && lastMappedFile != null) {
+                // 小于最小偏移量，或者大于最大偏移量
                 if (offset < firstMappedFile.getFileFromOffset() || offset >= lastMappedFile.getFileFromOffset() + this.mappedFileSize) {
                     LOG_ERROR.warn("Offset not matched. Request offset: {}, firstOffset: {}, lastOffset: {}, mappedFileSize: {}, mappedFiles count: {}",
                         offset,

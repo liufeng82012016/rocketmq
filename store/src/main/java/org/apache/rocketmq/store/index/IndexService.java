@@ -214,6 +214,7 @@ public class IndexService {
             DispatchRequest msg = req;
             String topic = msg.getTopic();
             String keys = msg.getKeys();
+            // 如果消息的偏移量小于索引文件，说明已经构建过索引
             if (msg.getCommitLogOffset() < endPhyOffset) {
                 return;
             }
@@ -278,6 +279,7 @@ public class IndexService {
         IndexFile indexFile = null;
 
         for (int times = 0; null == indexFile && times < MAX_TRY_IDX_CREATE; times++) {
+            // 如果索引文件创建（如果已存在且未写满，也会直接返回）失败，跳出循环
             indexFile = this.getAndCreateLastIndexFile();
             if (null != indexFile) {
                 break;

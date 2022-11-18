@@ -181,17 +181,21 @@ public class RemotingCommand {
     }
 
     public static RemotingCommand decode(final ByteBuf byteBuffer) throws RemotingCommandException {
+        // 总的可读字节数
         int length = byteBuffer.readableBytes();
+        // 读取一个整数
         int oriHeaderLen = byteBuffer.readInt();
+        // 获取header的长度
         int headerLength = getHeaderLength(oriHeaderLen);
         if (headerLength > length - 4) {
             throw new RemotingCommandException("decode error, bad header length: " + headerLength);
         }
-
+        // 解码header
         RemotingCommand cmd = headerDecode(byteBuffer, headerLength, getProtocolType(oriHeaderLen));
 
         int bodyLength = length - 4 - headerLength;
         byte[] bodyData = null;
+        // 读取body
         if (bodyLength > 0) {
             bodyData = new byte[bodyLength];
             byteBuffer.readBytes(bodyData);

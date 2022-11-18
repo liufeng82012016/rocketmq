@@ -107,6 +107,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
                 }
 
                 RemotingCommand response;
+                // 真正写入消息
                 if (requestHeader.isBatch()) {
                     response = this.sendBatchMessage(ctx, request, traceContext, requestHeader, mappingContext,
                         (ctx1, response1) -> executeSendMessageHookAfter(response1, ctx1));
@@ -124,7 +125,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         if (!this.brokerController.getBrokerConfig().isEnableSlaveActingMaster() && this.brokerController.getMessageStoreConfig().getBrokerRole() == BrokerRole.SLAVE) {
             return true;
         }
-
+        // 如果OsPageCacheBusy，或者开启了堆外内存且没有可用存储，则拒绝请求
         if (this.brokerController.getMessageStore().isOSPageCacheBusy() || this.brokerController.getMessageStore().isTransientStorePoolDeficient()) {
             return true;
         }
@@ -218,7 +219,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         final SendMessageRequestHeader requestHeader,
         final TopicQueueMappingContext mappingContext,
         final SendMessageCallback sendMessageCallback) throws RemotingCommandException {
-
+        // 发送前检查
         final RemotingCommand response = preSend(ctx, request, requestHeader);
         if (response.getCode() != -1) {
             return response;
@@ -230,7 +231,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
 
         int queueIdInt = requestHeader.getQueueId();
         TopicConfig topicConfig = this.brokerController.getTopicConfigManager().selectTopicConfig(requestHeader.getTopic());
-
+        // queueId 不可用，随机一个
         if (queueIdInt < 0) {
             queueIdInt = randomQueueId(topicConfig.getWriteQueueNums());
         }
@@ -290,12 +291,14 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         }
 
         long beginTimeMillis = this.brokerController.getMessageStore().now();
-
+        // 如果broker允许异步写入
         if (brokerController.getBrokerConfig().isAsyncSendEnable()) {
             CompletableFuture<PutMessageResult> asyncPutMessageFuture;
             if (sendTransactionPrepareMessage) {
+                // 如果是发送事务半消息
                 asyncPutMessageFuture = this.brokerController.getTransactionalMessageService().asyncPrepareMessage(msgInner);
             } else {
+                // 普通消息
                 asyncPutMessageFuture = this.brokerController.getMessageStore().asyncPutMessage(msgInner);
             }
 
@@ -315,8 +318,10 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         } else {
             PutMessageResult putMessageResult = null;
             if (sendTransactionPrepareMessage) {
+                // 事务半消息
                 putMessageResult = this.brokerController.getTransactionalMessageService().prepareMessage(msgInner);
             } else {
+                // 普通消息
                 putMessageResult = this.brokerController.getMessageStore().putMessage(msgInner);
             }
             handlePutMessageResult(putMessageResult, response, request, msgInner, responseHeader, sendMessageContext, ctx, queueIdInt, beginTimeMillis, mappingContext, BrokerMetricsManager.getMessageType(requestHeader));

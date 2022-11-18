@@ -135,6 +135,7 @@ public class CommitLog implements Swappable {
 
     public boolean load() {
         boolean result = this.mappedFileQueue.load();
+        // 校验2个相邻文件名，转换成long型，差是不是等于mappedFileSize
         this.mappedFileQueue.checkSelf();
         log.info("load commit log " + (result ? "OK" : "Failed"));
         return result;
@@ -202,10 +203,13 @@ public class CommitLog implements Swappable {
     }
 
     public SelectMappedBufferResult getData(final long offset, final boolean returnFirstOnNotFound) {
+        // 默认1G
         int mappedFileSize = this.defaultMessageStore.getMessageStoreConfig().getMappedFileSizeCommitLog();
         MappedFile mappedFile = this.mappedFileQueue.findMappedFileByOffset(offset, returnFirstOnNotFound);
         if (mappedFile != null) {
+            // 计算offset在这个mappedFile中的偏移量 取模
             int pos = (int) (offset % mappedFileSize);
+            // 创建一个缓冲区，mapperFile[0-pos] 共享数据
             SelectMappedBufferResult result = mappedFile.selectMappedBuffer(pos);
             return result;
         }
@@ -377,11 +381,12 @@ public class CommitLog implements Swappable {
      */
     public DispatchRequest checkMessageAndReturnSize(java.nio.ByteBuffer byteBuffer, final boolean checkCRC,
         final boolean checkDupInfo, final boolean readBody) {
+        // 从ByteBuffer读取内容，依次读取的内容是commitLog存储结构
         try {
-            // 1 TOTAL SIZE
+            // 1 TOTAL SIZE 4字节（消息+元数据）总长度
             int totalSize = byteBuffer.getInt();
 
-            // 2 MAGIC CODE
+            // 2 MAGIC CODE 4字节魔数
             int magicCode = byteBuffer.getInt();
             switch (magicCode) {
                 case MESSAGE_MAGIC_CODE:
@@ -394,41 +399,41 @@ public class CommitLog implements Swappable {
             }
 
             byte[] bytesContent = new byte[totalSize];
-
+            // 4字节消息CRC
             int bodyCRC = byteBuffer.getInt();
-
+            // 4字节queueId
             int queueId = byteBuffer.getInt();
-
+            // 4字节flag
             int flag = byteBuffer.getInt();
-
+            // 8字节queue偏移
             long queueOffset = byteBuffer.getLong();
-
+            // 8字节物理偏移
             long physicOffset = byteBuffer.getLong();
-
+            // 4字节sysFlag
             int sysFlag = byteBuffer.getInt();
-
+            // 8字节消息产生时间
             long bornTimeStamp = byteBuffer.getLong();
-
+            // 根据ipv4还是ipv6，分别获取消息产生的ip+port
             ByteBuffer byteBuffer1;
             if ((sysFlag & MessageSysFlag.BORNHOST_V6_FLAG) == 0) {
                 byteBuffer1 = byteBuffer.get(bytesContent, 0, 4 + 4);
             } else {
                 byteBuffer1 = byteBuffer.get(bytesContent, 0, 16 + 4);
             }
-
+            // 8字节消息存储时间
             long storeTimestamp = byteBuffer.getLong();
-
+            // 根据ipv4还是ipv6，分别获取消息存储的ip+port
             ByteBuffer byteBuffer2;
             if ((sysFlag & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0) {
                 byteBuffer2 = byteBuffer.get(bytesContent, 0, 4 + 4);
             } else {
                 byteBuffer2 = byteBuffer.get(bytesContent, 0, 16 + 4);
             }
-
+            // 4字节消费次数
             int reconsumeTimes = byteBuffer.getInt();
-
+            // 8字节事务相关偏移量
             long preparedTransactionOffset = byteBuffer.getLong();
-
+            // 4字节消息体长度
             int bodyLen = byteBuffer.getInt();
             if (bodyLen > 0) {
                 if (readBody) {
@@ -445,17 +450,19 @@ public class CommitLog implements Swappable {
                     byteBuffer.position(byteBuffer.position() + bodyLen);
                 }
             }
-
+            // 1字节topic长度 topic不能超过256
             byte topicLen = byteBuffer.get();
+            // 读取主题
             byteBuffer.get(bytesContent, 0, topicLen);
             String topic = new String(bytesContent, 0, topicLen, MessageDecoder.CHARSET_UTF8);
 
             long tagsCode = 0;
             String keys = "";
             String uniqKey = null;
-
+            // 2字节 properties长度，不能超过65535
             short propertiesLength = byteBuffer.getShort();
             Map<String, String> propertiesMap = null;
+            // 读取属性
             if (propertiesLength > 0) {
                 byteBuffer.get(bytesContent, 0, propertiesLength);
                 String properties = new String(bytesContent, 0, propertiesLength, MessageDecoder.CHARSET_UTF8);
@@ -508,7 +515,7 @@ public class CommitLog implements Swappable {
                     totalSize, readLength, bodyLen, topicLen, propertiesLength);
                 return new DispatchRequest(totalSize, false/* success */);
             }
-
+            // 转换成 dispatchRequest
             DispatchRequest dispatchRequest = new DispatchRequest(
                 topic,
                 queueId,
@@ -776,15 +783,16 @@ public class CommitLog implements Swappable {
         String topicQueueKey = generateKey(putMessageThreadLocal.getKeyBuilder(), msg);
         long elapsedTimeInLock = 0;
         MappedFile unlockMappedFile = null;
+        // 获取最后一个MappedFile
         MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile();
-
+        // 计算文件偏移量
         long currOffset;
         if (mappedFile == null) {
             currOffset = 0;
         } else {
             currOffset = mappedFile.getFileFromOffset() + mappedFile.getWrotePosition();
         }
-
+        // 需要ACK的从节点数量，默认1
         int needAckNums = this.defaultMessageStore.getMessageStoreConfig().getInSyncReplicas();
         boolean needHandleHA = needHandleHA(msg);
 
@@ -806,18 +814,19 @@ public class CommitLog implements Swappable {
             }
         }
 
+        // 加锁
         topicQueueLock.lock(topicQueueKey);
         try {
-
             boolean needAssignOffset = true;
             if (defaultMessageStore.getMessageStoreConfig().isDuplicationEnable()
                 && defaultMessageStore.getMessageStoreConfig().getBrokerRole() != BrokerRole.SLAVE) {
                 needAssignOffset = false;
             }
+            // 是否需要指定偏移，如果需要
             if (needAssignOffset) {
                 defaultMessageStore.assignOffset(msg, getMessageNum(msg));
             }
-
+            // 编码（将Message写入ByteBuf），不为空为失败，封装了错误信息
             PutMessageResult encodeResult = putMessageThreadLocal.getEncoder().encode(msg);
             if (encodeResult != null) {
                 return CompletableFuture.completedFuture(encodeResult);
@@ -839,12 +848,13 @@ public class CommitLog implements Swappable {
                 if (null == mappedFile || mappedFile.isFull()) {
                     mappedFile = this.mappedFileQueue.getLastMappedFile(0); // Mark: NewFile may be cause noise
                 }
+                // 如果没有mappedFile可用，返回异常
                 if (null == mappedFile) {
                     log.error("create mapped file1 error, topic: " + msg.getTopic() + " clientAddr: " + msg.getBornHostString());
                     beginTimeInLock = 0;
                     return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.CREATE_MAPPED_FILE_FAILED, null));
                 }
-
+                // 追加消息
                 result = mappedFile.appendMessage(msg, this.appendMessageCallback, putMessageContext);
                 switch (result.getStatus()) {
                     case PUT_OK:
@@ -1658,7 +1668,7 @@ public class CommitLog implements Swappable {
             // this msg maybe a inner-batch msg.
             short messageNum = getMessageNum(msgInner);
 
-            // Transaction messages that require special handling
+            // Transaction messages that require special handling 事务消息需要特殊处理
             final int tranType = MessageSysFlag.getTransactionValue(msgInner.getSysFlag());
             switch (tranType) {
                 // Prepared and Rollback message is not consumed, will not enter the consume queue
@@ -1675,7 +1685,7 @@ public class CommitLog implements Swappable {
             ByteBuffer preEncodeBuffer = msgInner.getEncodedBuff();
             final int msgLen = preEncodeBuffer.getInt(0);
 
-            // Determines whether there is sufficient free space
+            // Determines whether there is sufficient free space 确定是否有足够的可用空间
             if ((msgLen + END_FILE_MIN_BLANK_LENGTH) > maxBlank) {
                 this.msgStoreItemMemory.clear();
                 // 1 TOTALSIZE
@@ -1706,7 +1716,7 @@ public class CommitLog implements Swappable {
 
             final long beginTimeMills = CommitLog.this.defaultMessageStore.now();
             CommitLog.this.getMessageStore().getPerfCounter().startTick("WRITE_MEMORY_TIME_MS");
-            // Write messages to the queue buffer
+            // Write messages to the queue buffer 将消息写入队列缓冲区
             byteBuffer.put(preEncodeBuffer);
             CommitLog.this.getMessageStore().getPerfCounter().endTick("WRITE_MEMORY_TIME_MS");
             msgInner.setEncodedBuff(null);
@@ -1716,8 +1726,9 @@ public class CommitLog implements Swappable {
 
         public AppendMessageResult doAppend(final long fileFromOffset, final ByteBuffer byteBuffer, final int maxBlank,
             final MessageExtBatch messageExtBatch, PutMessageContext putMessageContext) {
+            // 对当前位置进行标记
             byteBuffer.mark();
-            //physical offset
+            //physical offset 计算写偏移量
             long wroteOffset = fileFromOffset + byteBuffer.position();
             // Record ConsumeQueue information
             Long queueOffset = messageExtBatch.getQueueOffset();
@@ -1820,7 +1831,7 @@ public class CommitLog implements Swappable {
 
         private final FlushCommitLogService flushCommitLogService;
 
-        //If TransientStorePool enabled, we must flush message to FileChannel at fixed periods
+        //If TransientStorePool enabled, we must flush message to FileChannel at fixed periods 如果启用了TransientStorePool，我们必须在固定时间将消息刷新到FileChannel
         private final FlushCommitLogService commitLogService;
 
         public DefaultFlushManager() {

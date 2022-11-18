@@ -359,6 +359,7 @@ public class DefaultMessageStore implements MessageStore {
         if (messageStoreConfig.isEnableCompaction() && this.compactionService != null) {
             this.compactionService.start();
         }
+        // 监控store服务状态
         this.storeStatsService.start();
 
         if (this.haService != null) {
@@ -382,7 +383,9 @@ public class DefaultMessageStore implements MessageStore {
          * 3. Calculate the reput offset according to the consume queue;
          * 4. Make sure the fall-behind messages to be dispatched before starting the commitlog, especially when the broker role are automatically changed.
          */
+        // 获取commitLog的最小偏移量，即commitLog文件名最小的数字
         long maxPhysicalPosInLogicQueue = commitLog.getMinOffset();
+        // 遍历所有的逻辑文件，如果consumerQueue的无力偏移量较大，跟新调
         for (ConcurrentMap<Integer, ConsumeQueueInterface> maps : this.getConsumeQueueTable().values()) {
             for (ConsumeQueueInterface logic : maps.values()) {
                 if (logic.getMaxPhysicOffset() > maxPhysicalPosInLogicQueue) {
@@ -391,6 +394,7 @@ public class DefaultMessageStore implements MessageStore {
             }
         }
         // If maxPhyPos(CQs) < minPhyPos(CommitLog), some newly deleted topics may be re-dispatched into cqs mistakenly.
+        // 如果最大偏移量小于0，置为0
         if (maxPhysicalPosInLogicQueue < 0) {
             maxPhysicalPosInLogicQueue = 0;
         }
@@ -398,8 +402,8 @@ public class DefaultMessageStore implements MessageStore {
             maxPhysicalPosInLogicQueue = this.commitLog.getMinOffset();
             /**
              * This happens in following conditions:
-             * 1. If someone removes all the consumequeue files or the disk get damaged.
-             * 2. Launch a new broker, and copy the commitlog from other brokers.
+             * 1. If someone removes all the consumequeue files or the disk get damaged.如果有人删除了所有消费队列文件或磁盘损坏
+             * 2. Launch a new broker, and copy the commitlog from other brokers.启动一个新的broker，并从其他broker复制commitlog。
              *
              * All the conditions has the same in common that the maxPhysicalPosInLogicQueue should be 0.
              * If the maxPhysicalPosInLogicQueue is gt 0, there maybe something wrong.
@@ -1590,6 +1594,7 @@ public class DefaultMessageStore implements MessageStore {
         this.scheduledExecutorService.scheduleAtFixedRate(new AbstractBrokerRunnable(this.getBrokerIdentity()) {
             @Override
             public void run2() {
+                // 定期清楚文件，会定期删除长时间（默认72小时）未被引用的commitLog文件
                 DefaultMessageStore.this.cleanFilesPeriodically();
             }
         }, 1000 * 60, this.messageStoreConfig.getCleanResourceInterval(), TimeUnit.MILLISECONDS);
@@ -1597,6 +1602,7 @@ public class DefaultMessageStore implements MessageStore {
         this.scheduledExecutorService.scheduleAtFixedRate(new AbstractBrokerRunnable(this.getBrokerIdentity()) {
             @Override
             public void run2() {
+                // 检查commitLog，consumeQueue是否损坏
                 DefaultMessageStore.this.checkSelf();
             }
         }, 1, 10, TimeUnit.MINUTES);
@@ -1609,7 +1615,7 @@ public class DefaultMessageStore implements MessageStore {
                         if (DefaultMessageStore.this.commitLog.getBeginTimeInLock() != 0) {
                             long lockTime = System.currentTimeMillis() - DefaultMessageStore.this.commitLog.getBeginTimeInLock();
                             if (lockTime > 1000 && lockTime < 10000000) {
-
+                                // 监控虚拟机堆栈使用日志
                                 String stack = UtilAll.jstack();
                                 final String fileName = System.getProperty("user.home") + File.separator + "debug/lock/stack-"
                                     + DefaultMessageStore.this.commitLog.getBeginTimeInLock() + "-" + lockTime;
@@ -1752,6 +1758,7 @@ public class DefaultMessageStore implements MessageStore {
     }
 
     public void doDispatch(DispatchRequest req) {
+        // 分发 构造器一共初始化了3个dispatcher
         for (CommitLogDispatcher dispatcher : this.dispatcherList) {
             dispatcher.dispatch(req);
         }
@@ -1857,6 +1864,7 @@ public class DefaultMessageStore implements MessageStore {
     public void onCommitLogDispatch(DispatchRequest dispatchRequest, boolean doDispatch, MappedFile commitLogFile,
         boolean isRecover, boolean isFileEnd) {
         if (doDispatch && !isFileEnd) {
+            // 分发消息
             this.doDispatch(dispatchRequest);
         }
     }
@@ -1874,7 +1882,7 @@ public class DefaultMessageStore implements MessageStore {
     @Override
     public void assignOffset(MessageExtBrokerInner msg, short messageNum) {
         final int tranType = MessageSysFlag.getTransactionValue(msg.getSysFlag());
-
+        // 非事务消息，或者事务的commit消息
         if (tranType == MessageSysFlag.TRANSACTION_NOT_TYPE || tranType == MessageSysFlag.TRANSACTION_COMMIT_TYPE) {
             this.consumeQueueStore.assignQueueOffset(msg, messageNum);
         }
@@ -1907,6 +1915,7 @@ public class DefaultMessageStore implements MessageStore {
         public void dispatch(DispatchRequest request) {
             final int tranType = MessageSysFlag.getTransactionValue(request.getSysFlag());
             switch (tranType) {
+                // TRANSACTION_NOT_TYPE TRANSACTION_COMMIT_TYPE调用putMessagePositionInfo()
                 case MessageSysFlag.TRANSACTION_NOT_TYPE:
                 case MessageSysFlag.TRANSACTION_COMMIT_TYPE:
                     DefaultMessageStore.this.putMessagePositionInfo(request);
@@ -1923,6 +1932,7 @@ public class DefaultMessageStore implements MessageStore {
         @Override
         public void dispatch(DispatchRequest request) {
             if (DefaultMessageStore.this.messageStoreConfig.isMessageIndexEnable()) {
+                // 构建索引
                 DefaultMessageStore.this.indexService.buildIndex(request);
             }
         }
@@ -2484,6 +2494,7 @@ public class DefaultMessageStore implements MessageStore {
             return DefaultMessageStore.this.getConfirmOffset() - this.reputFromOffset;
         }
 
+        // 判断reputFromOffset是否达到了最后一个文件能访问的地方
         private boolean isCommitLogAvailable() {
             if (DefaultMessageStore.this.getMessageStoreConfig().isDuplicationEnable()) {
                 return this.reputFromOffset <= DefaultMessageStore.this.commitLog.getConfirmOffset();
@@ -2498,7 +2509,7 @@ public class DefaultMessageStore implements MessageStore {
                 this.reputFromOffset = DefaultMessageStore.this.commitLog.getMinOffset();
             }
             for (boolean doNext = true; this.isCommitLogAvailable() && doNext; ) {
-
+                // 获取一个缓冲区，此缓冲区与mappedFile共享数据
                 SelectMappedBufferResult result = DefaultMessageStore.this.commitLog.getData(reputFromOffset);
 
                 if (result == null) {
@@ -2602,6 +2613,7 @@ public class DefaultMessageStore implements MessageStore {
 
             while (!this.isStopped()) {
                 try {
+                    // 每毫秒调用一次doReput方法
                     Thread.sleep(1);
                     this.doReput();
                 } catch (Exception e) {

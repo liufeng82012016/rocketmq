@@ -164,9 +164,11 @@ public abstract class NettyRemotingAbstract {
         if (msg != null) {
             switch (msg.getType()) {
                 case REQUEST_COMMAND:
+                    // 处理请求
                     processRequestCommand(ctx, msg);
                     break;
                 case RESPONSE_COMMAND:
+                    // 处理响应
                     processResponseCommand(ctx, msg);
                     break;
                 default:
@@ -241,6 +243,7 @@ public abstract class NettyRemotingAbstract {
      * @param cmd request command.
      */
     public void processRequestCommand(final ChannelHandlerContext ctx, final RemotingCommand cmd) {
+        // 根据code匹配processor和线程池，如果没有匹配到，使用默认processor
         final Pair<NettyRequestProcessor, ExecutorService> matched = this.processorTable.get(cmd.getCode());
         final Pair<NettyRequestProcessor, ExecutorService> pair = null == matched ? this.defaultRequestProcessorPair : matched;
         final int opaque = cmd.getOpaque();
@@ -255,8 +258,9 @@ public abstract class NettyRemotingAbstract {
             return;
         }
 
+        // 构建成runnable对象
         Runnable run = buildProcessRequestHandler(ctx, cmd, pair, opaque);
-
+        // 如果拒绝请求，返回系统繁忙
         if (pair.getObject1().rejectRequest()) {
             final RemotingCommand response = RemotingCommand.createResponseCommand(RemotingSysResponseCode.SYSTEM_BUSY,
                     "[REJECTREQUEST]system busy, start flow control for a while");
@@ -267,7 +271,7 @@ public abstract class NettyRemotingAbstract {
 
         try {
             final RequestTask requestTask = new RequestTask(run, ctx.channel(), cmd);
-            //async execute task, current thread return directly
+            //async execute task, current thread return directly 封装成任务，提交到线程池，直接返回
             pair.getObject2().submit(requestTask);
         } catch (RejectedExecutionException e) {
             if ((System.currentTimeMillis() % 10000) == 0) {
@@ -301,14 +305,15 @@ public abstract class NettyRemotingAbstract {
                 } catch (Exception e) {
                     exception = e;
                 }
-
                 if (exception == null) {
+                    // 如果Before方法执行通过，调用processor的()方法
                     response = pair.getObject1().processRequest(ctx, cmd);
                 } else {
                     response = RemotingCommand.createResponseCommand(RemotingSysResponseCode.SYSTEM_ERROR, null);
                 }
 
                 try {
+                    // 执行后检查
                     doAfterRpcHooks(remoteAddr, cmd, response);
                 } catch (Exception e) {
                     exception = e;
@@ -458,9 +463,11 @@ public abstract class NettyRemotingAbstract {
         final int opaque = request.getOpaque();
 
         try {
+            // 初始化future，加入到concurrentHashMap
             final ResponseFuture responseFuture = new ResponseFuture(channel, opaque, timeoutMillis, null, null);
             this.responseTable.put(opaque, responseFuture);
             final SocketAddress addr = channel.remoteAddress();
+            // 通过netty发送
             channel.writeAndFlush(request).addListener((ChannelFutureListener) f -> {
                 if (f.isSuccess()) {
                     responseFuture.setSendRequestOK(true);
@@ -473,7 +480,7 @@ public abstract class NettyRemotingAbstract {
                 responseFuture.putResponse(null);
                 log.warn("Failed to write a request command to {}, caused by underlying I/O operation failure", addr);
             });
-
+            // 业务同步阻塞等待
             RemotingCommand responseCommand = responseFuture.waitResponse(timeoutMillis);
             if (null == responseCommand) {
                 if (responseFuture.isSendRequestOK()) {

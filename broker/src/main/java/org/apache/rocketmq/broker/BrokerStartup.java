@@ -105,7 +105,7 @@ public class BrokerStartup {
                 int ratio = messageStoreConfig.getAccessMessageInMemoryMaxRatio() - 10;
                 messageStoreConfig.setAccessMessageInMemoryMaxRatio(ratio);
             }
-
+            // 加载配置文件，初始化各配置项
             if (commandLine.hasOption('c')) {
                 String file = commandLine.getOptionValue('c');
                 if (file != null) {
@@ -130,7 +130,7 @@ public class BrokerStartup {
                 System.out.printf("Please set the %s variable in your environment to match the location of the RocketMQ installation", MixAll.ROCKETMQ_HOME_ENV);
                 System.exit(-2);
             }
-
+            // 校验nameServer地址是否合法
             String namesrvAddr = brokerConfig.getNamesrvAddr();
             if (null != namesrvAddr) {
                 try {
@@ -165,14 +165,16 @@ public class BrokerStartup {
             }
 
             if (messageStoreConfig.isEnableDLegerCommitLog()) {
+                // 不采用主从的配置，采用多副本raft协议支持的集群模式
                 brokerConfig.setBrokerId(-1);
             }
-
+            // HA主从同步监听端口
             messageStoreConfig.setHaListenPort(nettyServerConfig.getListenPort() + 1);
             LoggerContext lc = (LoggerContext) LoggerFactory.getILoggerFactory();
             JoranConfigurator configurator = new JoranConfigurator();
             configurator.setContext(lc);
             lc.reset();
+            // 日志存储路径设置
             System.setProperty("brokerLogDir", "");
             if (brokerConfig.isIsolateLogEnable()) {
                 System.setProperty("brokerLogDir", brokerConfig.getBrokerName() + "_" + brokerConfig.getBrokerId());
@@ -213,7 +215,7 @@ public class BrokerStartup {
                 messageStoreConfig);
             // remember all configs to prevent discard
             controller.getConfiguration().registerConfig(properties);
-
+            // brokerController资源初始化
             boolean initResult = controller.initialize();
             if (!initResult) {
                 controller.shutdown();
